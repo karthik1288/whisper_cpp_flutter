@@ -51,7 +51,12 @@ final class _TranscriptionInvocation {
         throw WhisperException(n.lastError().toDartString());
       }
       try {
-        return WhisperResult.fromJson(jsonDecode(out.toDartString()));
+        // Token texts are byte-level BPE pieces and can split a multi-byte
+        // character (Devanagari, Telugu), so the JSON is decoded leniently
+        // instead of throwing FormatException on any non-Latin transcript.
+        return WhisperResult.fromJson(jsonDecode(utf8.decode(
+            out.cast<Uint8>().asTypedList(out.length),
+            allowMalformed: true)));
       } finally {
         n.stringFree(out);
       }
