@@ -13,7 +13,9 @@ android {
     compileSdk 35
     defaultConfig {
         minSdk 24
-        externalNativeBuild { cmake { cppFlags '-std=c++17 -O3 -fvisibility=hidden' } }
+        // ggml's kernels are C; without cFlags a debug build compiles them at -O0
+        // and whisper runs more than ten times slower than in release.
+        externalNativeBuild { cmake { cFlags '-O3 -fvisibility=hidden'; cppFlags '-std=c++17 -O3 -fvisibility=hidden' } }
         ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
     }
     externalNativeBuild { cmake { path '../CMakeLists.txt'; version '3.22.1' } }

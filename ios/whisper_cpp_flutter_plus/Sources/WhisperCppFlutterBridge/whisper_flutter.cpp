@@ -8,6 +8,25 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#ifdef __ANDROID__
+#include <android/log.h>
+// whisper.cpp logs to stderr, which Android drops; send them to logcat instead.
+static void android_log(ggml_log_level, const char * text, void *) { __android_log_print(ANDROID_LOG_INFO, "whisper", "%s", text); }
+#endif
+#ifdef GGML_BACKEND_DL
+#include "ggml-backend.h"
+// The CPU kernels are separate libraries, one per ARM feature level. ggml's own
+// directory scan cannot look inside an APK, so they are tried by name, best
+// first; a library the phone's CPU cannot run refuses to load (score 0).
+static void load_cpu_backend() {
+  if (ggml_backend_reg_count() > 0) return;
+  for (const char * name : {"libggml-cpu-android_armv8.6_1.so", "libggml-cpu-android_armv8.2_2.so", "libggml-cpu-android_armv8.0_1.so"}) {
+    if (ggml_backend_load(name)) return;
+  }
+}
+#else
+static void load_cpu_backend() {}
+#endif
 
 namespace {
 thread_local std::string error;
@@ -37,6 +56,10 @@ char * copy(const std::string & s) { auto *p=static_cast<char *>(std::malloc(s.s
 void * wf_context_create(const char * path, int gpu, int flash, int dtw, int dtw_model) {
   auto p=whisper_context_default_params(); p.use_gpu=gpu!=0; p.flash_attn=flash!=0;
   p.dtw_token_timestamps=dtw!=0; p.dtw_aheads_preset=static_cast<whisper_alignment_heads_preset>(dtw_model);
+#ifdef __ANDROID__
+  whisper_log_set(android_log, nullptr);
+#endif
+  load_cpu_backend();
   auto *ctx=whisper_init_from_file_with_params(path,p);
   if(!ctx) error="Unable to load whisper model: "+std::string(path?path:"");
   return ctx;
@@ -79,6 +102,7 @@ char * wf_run(void *c,void *jp,const float *samples,int n){auto*ctx=static_cast<
   j->p.abort_callback=abort_cb; j->p.abort_callback_user_data=j;
   j->p.progress_callback=progress_cb; j->p.progress_callback_user_data=j;
   auto start=std::chrono::steady_clock::now(); int rc=whisper_full(ctx,j->p,samples,n);
+  whisper_print_timings(ctx);
   if(rc!=0){error=j->cancelled?"Transcription cancelled":"whisper_full failed with code "+std::to_string(rc);return nullptr;}
   int lang=whisper_full_lang_id(ctx); const char *lang_name=lang>=0?whisper_lang_str(lang):"unknown";
   std::ostringstream o; o<<"{\"language\":\""<<esc(lang_name)<<"\",\"language_probability\":-1,\"system_info\":\""<<esc(whisper_print_system_info())<<"\",\"segments\":[";
@@ -92,7 +116,7 @@ char * wf_run(void *c,void *jp,const float *samples,int n){auto*ctx=static_cast<
   auto us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-start).count();
   o<<"],\"text\":\""<<esc(full.c_str())<<"\",\"processing_us\":"<<us<<'}'; return copy(o.str());
 }
-void *wf_vad_create(const char *path,int gpu,int threads){auto p=whisper_vad_default_context_params();p.use_gpu=gpu;p.n_threads=threads;auto*c=whisper_vad_init_from_file_with_params(path,p);if(!c)error="Unable to load VAD model";return c;}
+void *wf_vad_create(const char *path,int gpu,int threads){load_cpu_backend();auto p=whisper_vad_default_context_params();p.use_gpu=gpu;p.n_threads=threads;auto*c=whisper_vad_init_from_file_with_params(path,p);if(!c)error="Unable to load VAD model";return c;}
 void wf_vad_free(void*p){if(p)whisper_vad_free(static_cast<whisper_vad_context *>(p));}
 int wf_vad_is_speech(void*p,const float*s,int n,int continuous){if(!p||!s)return 0;auto*c=static_cast<whisper_vad_context *>(p);return continuous?whisper_vad_detect_speech_no_reset(c,s,n):whisper_vad_detect_speech(c,s,n);}
 void wf_vad_reset(void*p){if(p)whisper_vad_reset_state(static_cast<whisper_vad_context *>(p));}
