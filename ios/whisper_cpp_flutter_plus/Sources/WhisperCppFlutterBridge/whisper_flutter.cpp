@@ -13,8 +13,8 @@
 // whisper.cpp logs to stderr, which Android drops; send them to logcat instead.
 static void android_log(ggml_log_level, const char * text, void *) { __android_log_print(ANDROID_LOG_INFO, "whisper", "%s", text); }
 #endif
-#ifdef GGML_BACKEND_DL
 #include "ggml-backend.h"
+#ifdef GGML_BACKEND_DL
 // The CPU kernels are separate libraries, one per ARM feature level. ggml's own
 // directory scan cannot look inside an APK, so they are tried by name, best
 // first; a library the phone's CPU cannot run refuses to load (score 0).
@@ -27,6 +27,24 @@ static void load_cpu_backend() {
 #else
 static void load_cpu_backend() {}
 #endif
+
+// ggml registers the Metal device even when its shader library fails to
+// compile on the phone (seen on Apple's review iPad, iOS 27.2). whisper then
+// puts the model weights in Metal buffers, finds no backend that can run them,
+// and ggml aborts the process inside whisper_init_state. Starting the GPU
+// backend once beforehand tells us whether it works; if not, the CPU runs it.
+static bool gpu_backend_starts() {
+  for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+    auto * dev = ggml_backend_dev_get(i);
+    auto type = ggml_backend_dev_type(dev);
+    if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) continue;
+    auto * backend = ggml_backend_dev_init(dev, nullptr);
+    if (!backend) return false;
+    ggml_backend_free(backend);
+    return true;
+  }
+  return false;
+}
 
 namespace {
 thread_local std::string error;
@@ -60,6 +78,7 @@ void * wf_context_create(const char * path, int gpu, int flash, int dtw, int dtw
   whisper_log_set(android_log, nullptr);
 #endif
   load_cpu_backend();
+  if (p.use_gpu && !gpu_backend_starts()) p.use_gpu = false;
   auto *ctx=whisper_init_from_file_with_params(path,p);
   if(!ctx) error="Unable to load whisper model: "+std::string(path?path:"");
   return ctx;
@@ -116,7 +135,7 @@ char * wf_run(void *c,void *jp,const float *samples,int n){auto*ctx=static_cast<
   auto us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-start).count();
   o<<"],\"text\":\""<<esc(full.c_str())<<"\",\"processing_us\":"<<us<<'}'; return copy(o.str());
 }
-void *wf_vad_create(const char *path,int gpu,int threads){load_cpu_backend();auto p=whisper_vad_default_context_params();p.use_gpu=gpu;p.n_threads=threads;auto*c=whisper_vad_init_from_file_with_params(path,p);if(!c)error="Unable to load VAD model";return c;}
+void *wf_vad_create(const char *path,int gpu,int threads){load_cpu_backend();auto p=whisper_vad_default_context_params();p.use_gpu=gpu&&gpu_backend_starts();p.n_threads=threads;auto*c=whisper_vad_init_from_file_with_params(path,p);if(!c)error="Unable to load VAD model";return c;}
 void wf_vad_free(void*p){if(p)whisper_vad_free(static_cast<whisper_vad_context *>(p));}
 int wf_vad_is_speech(void*p,const float*s,int n,int continuous){if(!p||!s)return 0;auto*c=static_cast<whisper_vad_context *>(p);return continuous?whisper_vad_detect_speech_no_reset(c,s,n):whisper_vad_detect_speech(c,s,n);}
 void wf_vad_reset(void*p){if(p)whisper_vad_reset_state(static_cast<whisper_vad_context *>(p));}
