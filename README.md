@@ -81,6 +81,29 @@ Add a microphone usage description to your application's `Info.plist`:
 <string>Microphone access is used for offline transcription.</string>
 ```
 
+#### Metal shaders
+
+ggml loads its GPU kernels from `default.metallib` in the plugin bundle, which
+`ios/build_metallib.sh` compiles ahead of time for iOS 16 and later devices.
+Nothing is compiled on the phone, so the first run does not pause for a shader
+build and a device whose Metal compiler rejects the source still gets the GPU.
+If the library cannot be loaded, as on iOS 14 and 15, ggml compiles
+`ggml-metal.txt` from the same bundle instead, and if that fails too whisper
+runs on the CPU.
+
+Rerun the script whenever `ggml-metal.metal`, `ggml-common.h` or
+`ggml-metal-impl.h` change and commit both files under `ggml/Resources`. It
+needs Xcode's Metal Toolchain, which Xcode 26 no longer installs by default:
+
+```sh
+xcodebuild -downloadComponent MetalToolchain
+ios/build_metallib.sh
+```
+
+The shipped library leaves out the bfloat and tensor-API kernels so that one
+file loads on every supported GPU; ggml turns those two features off when it
+uses it.
+
 To use Core ML acceleration, place a compiled encoder such as
 `ggml-base.en-encoder.mlmodelc` beside the matching `ggml-base.en.bin` model.
 If the encoder is unavailable, inference falls back to Metal or the CPU.

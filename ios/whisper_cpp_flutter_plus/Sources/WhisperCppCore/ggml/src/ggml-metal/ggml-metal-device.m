@@ -101,12 +101,16 @@ struct ggml_metal_library {
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
 
+    bool precompiled; // loaded from default.metallib rather than compiled from source
+
     NSLock * lock;
 };
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLLibrary> library = nil;
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
+
+    bool precompiled = false;
 
     // load library
     //
@@ -177,10 +181,15 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
             library = [device newLibraryWithURL:libURL error:&error];
             if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
-                return nil;
+                GGML_LOG_WARN("%s: could not load '%s': %s, falling back to source\n", __func__, [path_lib UTF8String], [[error description] UTF8String]);
+                library = nil;
+                error = nil;
+            } else {
+                precompiled = true;
             }
-        } else {
+        }
+
+        if (library == nil) {
             GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
 
             NSString * path_source;
@@ -192,6 +201,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                 path_source = [path_resource stringByAppendingPathComponent:@"ggml-metal.metal"];
             } else {
                 path_source = [bundle pathForResource:@"ggml-metal" ofType:@"metal"];
+                if (path_source == nil) {
+                    // ios/build_metallib.sh ships the shader with its headers inlined under this name
+                    path_source = [bundle pathForResource:@"ggml-metal" ofType:@"txt"];
+                }
             }
 
             if (path_source == nil) {
@@ -252,10 +265,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
 
-    res->obj       = library;
-    res->dev       = dev;
-    res->pipelines = ggml_metal_pipelines_init();
-    res->lock      = [NSLock new];
+    res->obj         = library;
+    res->dev         = dev;
+    res->pipelines   = ggml_metal_pipelines_init();
+    res->precompiled = precompiled;
+    res->lock        = [NSLock new];
 
     return res;
 }
@@ -896,6 +910,16 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             dev->library = ggml_metal_library_init(dev);
             if (!dev->library) {
                 GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+            } else if (dev->library->precompiled && (dev->props.has_bfloat || dev->props.has_tensor)) {
+                // ios/build_metallib.sh compiles the shipped library without GGML_METAL_HAS_BF16 and
+                // GGML_METAL_HAS_TENSOR so one file loads on every iOS 16+ GPU. The mul_mm kernels keep
+                // their names but change their threadgroup geometry under the tensor define, so the
+                // device must agree with the library.
+                // ponytail: A19 and later lose the tensor-API matmul; ship a second library built
+                // with -std=metal4.0 and both defines, picked when has_tensor, if that ever matters.
+                GGML_LOG_INFO("%s: precompiled library has no bfloat or tensor kernels, disabling both\n", __func__);
+                dev->props.has_bfloat = false;
+                dev->props.has_tensor = false;
             }
 
             if (dev->props.use_residency_sets) {

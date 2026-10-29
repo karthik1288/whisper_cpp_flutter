@@ -19,10 +19,11 @@ Pod::Spec.new do |s|
     'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/src/ggml-blas/ggml-blas.cpp',
     'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/src/ggml-metal/*.{m,cpp}'
   ]
+  # Both files come from ios/build_metallib.sh: the precompiled shaders ggml loads
+  # first, and the merged shader source it compiles on the device if that fails.
   s.resources = [
-    'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/Resources/ggml-metal.txt',
-    'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/src/ggml-metal/ggml-metal-impl.h',
-    'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/src/ggml-common.h'
+    'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/Resources/default.metallib',
+    'whisper_cpp_flutter_plus/Sources/WhisperCppCore/ggml/Resources/ggml-metal.txt'
   ]
   s.public_header_files = 'whisper_cpp_flutter_plus/Sources/WhisperCppFlutterBridge/whisper_flutter.h'
   s.dependency 'Flutter'

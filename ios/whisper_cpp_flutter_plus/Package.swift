@@ -120,10 +120,11 @@ let package = Package(
                 "src/ggml-metal/ggml-metal-ops.cpp",
                 "src/ggml-metal/ggml-metal.cpp",
             ],
+            // Both files come from ios/build_metallib.sh: the precompiled shaders ggml
+            // loads first, and the merged shader source it compiles on the device if that fails.
             resources: [
+                .copy("Resources/default.metallib"),
                 .copy("Resources/ggml-metal.txt"),
-                .copy("src/ggml-metal/ggml-metal-impl.h"),
-                .copy("src/ggml-common.h"),
             ],
             publicHeadersPath: "include",
             cSettings: nativeDefines + [

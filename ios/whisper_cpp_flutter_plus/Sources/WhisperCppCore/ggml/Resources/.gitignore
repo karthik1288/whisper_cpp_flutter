@@ -1,0 +1,2 @@
+# whisper.cpp ignores *.metallib; this one is built by ios/build_metallib.sh and shipped
+!default.metallib
