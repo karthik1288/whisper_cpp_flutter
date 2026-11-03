@@ -72,10 +72,13 @@ final class WhisperTask {
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!_progress.isClosed) {
         _progress.add(NativeBindings.instance.progress(_job));
+        _collectSegments();
       }
     });
     void done() {
       _timer.cancel();
+      _collectSegments();
+      _segments.close();
       _progress.close();
       NativeBindings.instance.jobFree(_job);
     }
@@ -92,6 +95,36 @@ final class WhisperTask {
 
   /// Distinct native progress percentages from 0 through 100.
   Stream<int> get progress => _progress.stream.distinct();
+
+  /// Segments as whisper.cpp finishes them, before [result] completes, in
+  /// order and with times on the audio's own clock even when VAD skips parts
+  /// of it. They carry no tokens; [result] has the full detail. Everything
+  /// arrives here by the time [result] completes, if listened to from the start.
+  Stream<List<WhisperSegment>> get segments => _segments.stream;
+  final _segments = StreamController<List<WhisperSegment>>.broadcast();
+
+  void _collectSegments() {
+    final n = NativeBindings.instance, out = n.takeSegments(_job);
+    if (out == nullptr) return;
+    try {
+      // Leniently, for the same reason as the result JSON above.
+      final list = jsonDecode(utf8.decode(
+          out.cast<Uint8>().asTypedList(out.length),
+          allowMalformed: true)) as List;
+      _segments.add([
+        for (final s in list.cast<Map<String, dynamic>>())
+          WhisperSegment(
+              text: s['text'] as String,
+              start: Duration(milliseconds: s['t0'] as int),
+              end: Duration(milliseconds: s['t1'] as int),
+              tokens: const [],
+              noSpeechProbability: 0,
+              speakerTurnNext: false),
+      ]);
+    } finally {
+      n.stringFree(out);
+    }
+  }
 
   /// Requests cooperative cancellation of the native job.
   ///

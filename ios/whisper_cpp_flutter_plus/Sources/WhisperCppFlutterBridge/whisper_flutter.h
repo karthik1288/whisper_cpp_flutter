@@ -17,6 +17,8 @@ WF_API void wf_job_set_double(void * job, const char * key, double value);
 WF_API void wf_job_set_string(void * job, const char * key, const char * value);
 WF_API void wf_job_cancel(void * job);
 WF_API int wf_job_progress(void * job);
+// The segments finished since the last call, as a JSON array, or null if none.
+WF_API char * wf_job_take_segments(void * job);
 WF_API char * wf_run(void * context, void * job, const float * samples, int n_samples);
 WF_API void * wf_vad_create(const char * model_path, int use_gpu, int threads);
 WF_API void wf_vad_free(void * context);

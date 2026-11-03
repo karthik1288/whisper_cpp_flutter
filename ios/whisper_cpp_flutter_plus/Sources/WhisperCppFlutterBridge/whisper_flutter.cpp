@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -53,6 +54,10 @@ struct Job {
   std::string language = "auto", prompt, suppress_regex, vad_model;
   std::atomic<bool> cancelled{false};
   std::atomic<int> progress{0};
+  // Segments finished but not yet collected, as JSON objects joined by commas.
+  std::mutex live_lock;
+  std::string live;
+  int live_sent = 0;
   explicit Job(int strategy) : p(whisper_full_default_params(
       strategy == 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY)) {}
 };
@@ -67,6 +72,16 @@ std::string esc(const char * s) {
     default: if (static_cast<unsigned char>(*s) < 0x20) o << "\\u" << std::hex << std::setw(4) << std::setfill('0') << int(*s); else o << *s;
   }
   return o.str();
+}
+// Called on the thread running whisper_full. Counts from what was already sent
+// because whisper_wrap_segment splits a segment into several as it goes. The
+// _from_state time getters put back the quiet parts VAD removed.
+void segment_cb(whisper_context *, whisper_state * state, int, void * data) {
+  auto *j=static_cast<Job *>(data); std::ostringstream o;
+  int ns=whisper_full_n_segments_from_state(state);
+  for(int i=j->live_sent;i<ns;i++){ if(i>j->live_sent)o<<',';
+    o<<"{\"text\":\""<<esc(whisper_full_get_segment_text_from_state(state,i))<<"\",\"t0\":"<<whisper_full_get_segment_t0_from_state(state,i)*10<<",\"t1\":"<<whisper_full_get_segment_t1_from_state(state,i)*10<<'}';}
+  if(ns>j->live_sent){ std::lock_guard<std::mutex> hold(j->live_lock); if(!j->live.empty())j->live+=','; j->live+=o.str(); j->live_sent=ns; }
 }
 char * copy(const std::string & s) { auto *p=static_cast<char *>(std::malloc(s.size()+1)); if(p) std::memcpy(p,s.c_str(),s.size()+1); return p; }
 }
@@ -88,6 +103,8 @@ void * wf_job_create(int strategy){ try{return new Job(strategy);}catch(...){err
 void wf_job_free(void *p){delete static_cast<Job *>(p);}
 void wf_job_cancel(void *p){if(p) static_cast<Job *>(p)->cancelled=true;}
 int wf_job_progress(void *p){return p?static_cast<Job *>(p)->progress.load():0;}
+char * wf_job_take_segments(void *p){ if(!p)return nullptr; auto*j=static_cast<Job *>(p); std::lock_guard<std::mutex> hold(j->live_lock);
+  if(j->live.empty())return nullptr; auto*out=copy("["+j->live+"]"); j->live.clear(); return out; }
 
 void wf_job_set_int(void * ptr,const char *k,int64_t v){auto &p=static_cast<Job *>(ptr)->p; std::string s(k);
   if(s=="threads")p.n_threads=v; else if(s=="translate")p.translate=v; else if(s=="detect_language")p.detect_language=v;
@@ -120,6 +137,7 @@ char * wf_run(void *c,void *jp,const float *samples,int n){auto*ctx=static_cast<
   j->p.suppress_regex=j->suppress_regex.empty()?nullptr:j->suppress_regex.c_str(); j->p.vad_model_path=j->vad_model.empty()?nullptr:j->vad_model.c_str();
   j->p.abort_callback=abort_cb; j->p.abort_callback_user_data=j;
   j->p.progress_callback=progress_cb; j->p.progress_callback_user_data=j;
+  j->live_sent=0; j->p.new_segment_callback=segment_cb; j->p.new_segment_callback_user_data=j;
   auto start=std::chrono::steady_clock::now(); int rc=whisper_full(ctx,j->p,samples,n);
   whisper_print_timings(ctx);
   if(rc!=0){error=j->cancelled?"Transcription cancelled":"whisper_full failed with code "+std::to_string(rc);return nullptr;}

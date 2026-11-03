@@ -45,6 +45,8 @@ final class NativeBindings {
     progress =
         lib.lookupFunction<Int32 Function(NativeJob), int Function(NativeJob)>(
             'wf_job_progress');
+    takeSegments = lib.lookupFunction<Pointer<Utf8> Function(NativeJob),
+        Pointer<Utf8> Function(NativeJob)>('wf_job_take_segments');
     stringFree = lib.lookupFunction<Void Function(Pointer<Utf8>),
         void Function(Pointer<Utf8>)>('wf_string_free');
     lastError =
@@ -94,6 +96,7 @@ final class NativeBindings {
       NativeContext, NativeJob, Pointer<Float>, int) run;
   late final void Function(NativeJob) cancel;
   late final int Function(NativeJob) progress;
+  late final Pointer<Utf8> Function(NativeJob) takeSegments;
   late final void Function(Pointer<Utf8>) stringFree;
   late final Pointer<Utf8> Function() lastError;
   late final Pointer<Void> Function(Pointer<Utf8>, int, int) vadCreate;
